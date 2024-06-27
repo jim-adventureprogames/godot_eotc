@@ -1,0 +1,157 @@
+name: EotC Cross-Compiled Builds
+on:
+  workflow_call:
+
+concurrency:
+  group: ci-${{github.actor}}-${{github.head_ref || github.run_number}}-${{github.ref}}-eotc-cross
+  cancel-in-progress: true
+
+# NOTE: Cross-compiling on Linux for Windows breaks the editors ability to export unless windows_subsystem=console is used.
+
+jobs:
+  build-linux-editor:
+    name: Linux Editor w/ Mono (target=editor)
+    uses: ./.github/workflows/eotc_godot_build.yml
+    with:
+      cache-name: eotc-linux-editor-mono
+      platform: "linuxbsd"
+      target: editor
+      sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+      bin: "./bin/godot.linuxbsd.editor.x86_64.mono"
+      build-mono: true
+      glue-dump: true
+      tests: false
+      artifact: true
+
+  build-windows-editor:
+    needs: build-linux-editor
+    name: Windows Editor w/ Mono (target=editor)
+    uses: ./.github/workflows/eotc_godot_build.yml
+    with:
+      cache-name: eotc-windows-editor-mono
+      platform: "windows"
+      target: editor
+      sconsflags: arch=x86_64 windows_subsystem=console module_mono_enabled=yes #production=yes
+      bin: "./bin/godot.windows.editor.x86_64.mono"
+      build-mono: true
+      tests: false
+      artifact: true
+
+  build-templates:
+    name: Build Export Templates
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux Template w/ Mono (target=template_debug)
+            cache-name: eotc-linux-template-debug-mono
+            platform: "linuxbsd"
+            target: template_debug
+            sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+            build-mono: false
+            tests: false
+            artifact: true
+
+          - name: Linux Template w/ Mono (target=template_release)
+            cache-name: eotc-linux-template-release-mono
+            platform: "linuxbsd"
+            target: template_release
+            sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+            build-mono: false
+            tests: false
+            artifact: true
+
+          - name: Windows Template w/ Mono (target=template_debug)
+            cache-name: eotc-windows-template-debug-mono
+            platform: "windows"
+            target: template_debug
+            sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+            build-mono: false
+            tests: false
+            artifact: true
+
+          - name: Windows Template w/ Mono (target=template_release)
+            cache-name: eotc-windows-template-release-mono
+            platform: "windows"
+            target: template_release
+            sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+            build-mono: false
+            tests: false
+            artifact: true
+
+    uses: ./.github/workflows/eotc_godot_build.yml
+    with:
+      cache-name: ${{ matrix.cache-name }}
+      platform: ${{ matrix.platform }}
+      target: ${{ matrix.target }}
+      sconsflags: ${{ matrix.sconsflags }}
+      build-mono: ${{ matrix.build-mono }}
+      tests: ${{ matrix.tests }}
+      artifact: ${{ matrix.artifact }}
+
+  create-release:
+    name: Create Release
+    needs: [build-linux-editor, build-windows-editor, build-templates]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/v') # success() &&
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      upload_url: ${{ steps.create-release.outputs.upload_url }}
+    steps:
+      - name: Prepare variables
+        id: variables
+        run: |
+          DATE=$(date +'%Y/%m/%d @ %H:%M:%S')
+          SHA=${GITHUB_SHA:0:7}
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "tag=release-$SHA-$DATE" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        id: create-release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: EotC Godot Engine (${{ github.ref_name }}/${{ steps.variables.outputs.sha }})
+          body: "${{ steps.variables.outputs.date }}\n**Full Changelog**: ${{ github.server_url }}/${{ github.repository }}/commits/${{ github.ref_name }}"
+          draft: true
+          prerelease: false
+
+  upload-release:
+    name: Upload Release
+    needs: create-release
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      matrix:
+        artifact_name: [
+          eotc-linux-editor-mono,
+          eotc-linux-template-debug-mono,
+          eotc-linux-template-release-mono,
+          eotc-windows-editor-mono,
+          eotc-windows-template-debug-mono,
+          eotc-windows-template-release-mono
+        ]
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ./${{ matrix.artifact_name }}
+
+      - name: Zip artifact
+        run: |
+          base_path=$(pwd)
+          pushd ${{ matrix.artifact_name }}
+          zip -ry $base_path/${{ matrix.artifact_name }}.zip *
+          popd
+
+      - name: Upload release artifact
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ matrix.artifact_name }}.zip
+          asset_name: ${{ matrix.artifact_name }}.zip
+          asset_content_type: application/zip

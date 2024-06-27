@@ -1,0 +1,143 @@
+name: Build EotC Godot
+on:
+  workflow_call:
+    inputs:
+      cache-name:
+        description: Key to use for caching.
+        required: true
+        type: string
+      platform:
+        description: Target platform.
+        default: "linuxbsd"
+        required: false
+        type: string
+      target:
+        description: Build target (editor, template_release, template_debug).
+        default: "editor"
+        type: string
+      sconsflags:
+        default: ""
+        type: string
+      bin:
+        description: The path to the built Godot executable.
+        type: string
+      tests:
+        description: Unit tests.
+        default: false
+        type: boolean
+      build-mono:
+        description: Whether to build the mono glue or not.
+        default: false
+        type: boolean
+      glue-dump:
+        description: Dump the generated glue sources for use in other workflows.
+        default: false
+        type: boolean
+      artifact:
+        description: Whether to save an artifact or not.
+        default: true
+        type: boolean
+
+# Global Settings
+env:
+  # Used for the cache key. Add version suffix to force clean build.
+  GODOT_BASE_BRANCH: master
+  SCONSFLAGS: verbose=yes warnings=extra #module_text_server_fb_enabled=yes
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  TSAN_OPTIONS: suppressions=misc/error_suppressions/tsan.txt
+
+jobs:
+  eotc-godot-build:
+    runs-on: "ubuntu-20.04"
+    name: ${{ inputs.cache-name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Free disk space on runner
+        run: |
+          echo "Disk usage before:" && df -h
+          sudo rm -rf /usr/local/lib/android
+          echo "Disk usage after:" && df -h
+
+      - name: Setup Godot build cache
+        uses: ./.github/actions/godot-cache
+        with:
+          cache-name: ${{ inputs.cache-name }}
+        continue-on-error: true
+
+      - name: Setup Python and SCons
+        if: ${{ ! inputs.legacy-scons }}
+        uses: ./.github/actions/godot-deps
+
+      - name: Setup Python and SCons (legacy versions)
+        if: ${{ inputs.legacy-scons }}
+        uses: ./.github/actions/godot-deps
+        with:
+          # Sync with Ensure*Version in SConstruct.
+          python-version: 3.6
+          scons-version: 3.1.2
+
+      - name: Install Cross-Compilation Toolchain
+        if: ${{ inputs.platform == 'windows' }}
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install mingw-w64
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+
+      - name: Setup GCC problem matcher
+        uses: ammaraskar/gcc-problem-matcher@master
+
+      - name: Compilation
+        uses: ./.github/actions/godot-build
+        with:
+          sconsflags: ${{ env.SCONSFLAGS }} ${{ inputs.sconsflags }}
+          platform: ${{ inputs.platform }}
+          target: ${{ inputs.target }}
+          tests: ${{ inputs.tests }}
+
+      - name: Generate C# glue
+        if: ${{ inputs.build-mono && inputs.platform != 'windows' }}
+        run: |
+          ${{ inputs.bin }} --headless --generate-mono-glue ./modules/mono/glue-dump
+          cp -r ./modules/mono/glue-dump/* ./modules/mono/glue
+
+      - name: Upload C# glue dump
+        if: ${{ inputs.build-mono && inputs.platform != 'windows' && inputs.glue-dump }}
+        uses: ./.github/actions/upload-artifact
+        with:
+          name: 'godot-mono-generated-glue'
+          path: './modules/mono/glue-dump'
+
+      - name: Cleanup C# glue dump
+        if: ${{ inputs.build-mono && inputs.platform != 'windows' }}
+        run: |
+          rm -rf ./modules/mono/glue-dump
+
+      - name: Download C# glue
+        if: ${{ inputs.build-mono && inputs.platform == 'windows' }}
+        uses: ./.github/actions/download-artifact
+        with:
+          name: 'godot-mono-generated-glue'
+          path: './modules/mono/glue'
+
+      - name: Build .NET solutions
+        if: ${{ inputs.build-mono }}
+        run: |
+          ./modules/mono/build_scripts/build_assemblies.py --godot-output-dir=./bin --godot-platform=${{ inputs.platform }}
+
+      - name: Prepare artifact
+        if: ${{ inputs.build-mono }}
+        run: |
+          strip bin/godot.*
+          chmod +x bin/godot.*
+
+      - name: Upload artifact
+        uses: ./.github/actions/upload-artifact
+        if: ${{ inputs.artifact }}
+        with:
+          name: ${{ inputs.cache-name }}
