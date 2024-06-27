@@ -1,0 +1,109 @@
+name: Build Win32 EotC Godot
+on:
+  workflow_call:
+    inputs:
+      cache-name:
+        description: Key to use for caching.
+        required: true
+        type: string
+      platform:
+        description: Target platform.
+        default: "linuxbsd"
+        required: false
+        type: string
+      target:
+        description: Build target (editor, template_release, template_debug).
+        default: "editor"
+        type: string
+      sconsflags:
+        default: ""
+        type: string
+      bin:
+        description: The path to the built Godot executable.
+        type: string
+      tests:
+        description: Unit tests.
+        default: false
+        type: boolean
+      build-mono:
+        description: Whether to build the mono glue or not.
+        default: false
+        type: boolean
+      glue-dump:
+        description: Dump the generated glue sources for use in other workflows.
+        default: false
+        type: boolean
+      artifact:
+        description: Whether to save an artifact or not.
+        default: true
+        type: boolean
+
+# Global Settings
+env:
+  # Used for the cache key. Add version suffix to force clean build.
+  GODOT_BASE_BRANCH: master
+  SCONSFLAGS: verbose=yes warnings=extra #module_text_server_fb_enabled=yes
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  TSAN_OPTIONS: suppressions=misc/error_suppressions/tsan.txt
+
+jobs:
+  eotc-godot-build:
+    # Windows 10 with latest image
+    runs-on: "windows-latest"
+    name: ${{ inputs.cache-name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Godot build cache
+        uses: ./.github/actions/godot-cache
+        with:
+          cache-name: ${{ inputs.cache-name }}
+        continue-on-error: true
+
+      - name: Setup Python and SCons
+        uses: ./.github/actions/godot-deps
+
+      - name: Download Direct3D 12 SDK components
+        run: python ./misc/scripts/install_d3d12_sdk_windows.py
+
+      - name: Download pre-built ANGLE static libraries
+        uses: dsaltares/fetch-gh-release-asset@1.1.2
+        with:
+          repo: godotengine/godot-angle-static
+          version: tags/chromium/6029
+          file: Windows.6029-1.MSVC_17.x86_64.x86_32.zip
+          target: angle/angle.zip
+
+      - name: Extract pre-built ANGLE static libraries
+        run: Expand-Archive -Force angle/angle.zip ${{github.workspace}}/
+
+      - name: Setup MSVC problem matcher
+        uses: ammaraskar/msvc-problem-matcher@master
+
+      - name: Compilation
+        uses: ./.github/actions/godot-build
+        with:
+          sconsflags: ${{ env.SCONSFLAGS }} ${{ inputs.sconsflags }}
+          platform: windows
+          target: ${{ inputs.target }}
+          tests: ${{ inputs.tests }}
+
+      - name: Prepare artifact
+        run: |
+          Remove-Item bin/* -Include *.exp,*.lib,*.pdb -Force
+
+      - name: Upload artifact
+        uses: ./.github/actions/upload-artifact
+        with:
+          name: ${{ inputs.cache-name }}
+
+      # Execute unit tests for the editor
+      - name: Unit tests
+        if: ${{ inputs.tests }}
+        run: |
+          ${{ inputs.bin }} --version
+          ${{ inputs.bin }} --help
+          ${{ inputs.bin }} --test --force-colors
