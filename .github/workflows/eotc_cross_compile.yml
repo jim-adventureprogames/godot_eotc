@@ -1,0 +1,88 @@
+name: EotC Cross-Compiled Builds
+on:
+  workflow_call:
+
+concurrency:
+  group: ci-${{github.actor}}-${{github.head_ref || github.run_number}}-${{github.ref}}-eotc-cross
+  cancel-in-progress: true
+
+jobs:
+  build-linux-editor:
+    name: Linux Editor w/ Mono (target=editor)
+    uses: ./.github/workflows/eotc_godot_build.yml
+    with:
+      cache-name: eotc-linux-editor-mono
+      platform: "linuxbsd"
+      target: editor
+      sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+      bin: "./bin/godot.linuxbsd.editor.x86_64.mono"
+      build-mono: true
+      glue-dump: true
+      tests: false
+      artifact: true
+
+  build-windows-editor:
+    needs: build-linux-editor
+    name: Windows Editor w/ Mono (target=editor)
+    uses: ./.github/workflows/eotc_godot_build.yml
+    with:
+      cache-name: eotc-windows-editor-mono
+      platform: "windows"
+      target: editor
+      sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+      bin: "./bin/godot.windows.editor.x86_64.mono"
+      build-mono: true
+      tests: false
+      artifact: true
+
+  build-templates:
+    name: Build Export Templates
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux Template w/ Mono (target=template_debug)
+            cache-name: eotc-linux-template-debug-mono
+            platform: "linuxbsd"
+            target: template_debug
+            sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+            build-mono: false
+            tests: false
+            artifact: true
+
+          - name: Linux Template w/ Mono (target=template_release)
+            cache-name: eotc-linux-template-release-mono
+            platform: "linuxbsd"
+            target: template_release
+            sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+            build-mono: false
+            tests: false
+            artifact: true
+
+          - name: Windows Template w/ Mono (target=template_debug)
+            cache-name: eotc-windows-template-debug-mono
+            platform: "windows"
+            target: template_debug
+            sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+            build-mono: false
+            tests: false
+            artifact: true
+
+          - name: Windows Template w/ Mono (target=template_release)
+            cache-name: eotc-windows-template-release-mono
+            platform: "windows"
+            target: template_release
+            sconsflags: arch=x86_64 module_mono_enabled=yes #production=yes
+            build-mono: false
+            tests: false
+            artifact: true
+
+    uses: ./.github/workflows/eotc_godot_build.yml
+    with:
+      cache-name: ${{ matrix.cache-name }}
+      platform: ${{ matrix.platform }}
+      target: ${{ matrix.target }}
+      sconsflags: ${{ matrix.sconsflags }}
+      build-mono: ${{ matrix.build-mono }}
+      tests: ${{ matrix.tests }}
+      artifact: ${{ matrix.artifact }}

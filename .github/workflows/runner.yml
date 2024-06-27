@@ -51,6 +51,11 @@ jobs:
     needs: static-checks
     uses: ./.github/workflows/web_builds.yml
 
+  eotc-cross-build:
+    name: EotC Cross-Compiled Builds
+    needs: static-checks
+    uses: ./.github/workflows/eotc_cross_compile.yml
+
   # Third stage: Run auxiliary tests using build artifacts from previous jobs.
 
   # Can be turned off for PRs that intentionally break compat with godot-cpp,
