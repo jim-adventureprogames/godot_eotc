@@ -122,6 +122,8 @@ void MeshLibraryEditor::_import_scene(Node *p_scene, Ref<MeshLibrary> p_library,
 			p_library->set_item_mesh_transform(id, Transform3D());
 		}
 
+		p_library->set_item_render_layers(id, mi->get_layer_mask());
+
 		mesh_instances[id] = mi;
 
 		Vector<MeshLibrary::ShapeData> collisions;
